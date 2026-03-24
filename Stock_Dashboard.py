@@ -1,3 +1,4 @@
+from typing import Any
 import streamlit as st
 import plotly.graph_objects as go
 import yfinance as yf
@@ -9,26 +10,32 @@ st.markdown("""
 <style>
     .main-title { text-align: center; color: #1a73e8 !important; font-size: 6rem !important; font-weight: 700 !important; margin-bottom: 0.8rem; line-height: 1.1; }
     .metric-card { border-radius: 10px; padding: 16px 20px; margin: 4px; }
-    .card-open   { background-color: #dbeafe; }
-    .card-high   { background-color: #dcfce7; }
-    .card-low    { background-color: #fee2e2; }
-    .card-close  { background-color: #f3e8ff; }
-    .card-volume { background-color: #fef9c3; }
+    .card-open    { background-color: #dbeafe; }
+    .card-high    { background-color: #dcfce7; }
+    .card-low     { background-color: #fee2e2; }
+    .card-close   { background-color: #dbeafe; }
+    .card-volume  { background-color: #dbeafe; }
+    .card-change-up   { background-color: #dcfce7; }
+    .card-change-down { background-color: #fee2e2; }
+    .card-change-flat { background-color: #fef9c3; }
     .card-label  { font-size: 0.75rem; color: #555; font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
     .card-value  { font-size: 1.6rem; font-weight: 700; }
     .open-val    { color: #1d4ed8; }
     .high-val    { color: #15803d; }
     .low-val     { color: #dc2626; }
-    .close-val   { color: #7e22ce; }
-    .vol-val     { color: #92400e; }
+    .close-val   { color: #1d4ed8; }
+    .vol-val     { color: #1d4ed8; }
+    .change-up   { color: #15803d; }
+    .change-down { color: #dc2626; }
+    .change-flat { color: #92400e; }
 </style>
 """, unsafe_allow_html=True)
 
 #Header
 st.markdown('<h1 class="main-title">Stock Price Dashboard</h1>', unsafe_allow_html=True)
 
-#Controls (Stock symbol + Time range)
-col_sym, col_range = st.columns([2, 1.2])
+#Controls (Stock symbol + Time range + Candle time)
+col_sym, col_range, col_candle = st.columns([2, 1.2, 1.2])
 
 with col_sym:
     st.markdown("**Stock Symbol**")
@@ -37,31 +44,44 @@ with col_sym:
 with col_range:
     st.markdown("**Time Range**")
     time_options = {
-        "7 days":   ("7d",  "1d"),
-        "14 days":  ("14d", "1d"),
-        "30 days":  ("1mo", "1d"),
-        "90 days":  ("3mo", "1d"),
-        "180 days": ("6mo", "1d"),
-        "1 year":   ("1y",  "1d"),
-        "5 years":  ("5y",  "1wk"),
+        "7 days":   "7d",
+        "14 days":  "14d",
+        "30 days":  "1mo",
+        "90 days":  "3mo",
+        "180 days": "6mo",
+        "1 year":   "1y",
+        "5 years":  "5y",
     }
     selected_range = st.selectbox("Time Range", list(time_options.keys()), index=2, label_visibility="collapsed")
 
+with col_candle:
+    st.markdown("**Candle Time**")
+    candle_options = {
+        "15 min": "15m",
+        "30 min": "30m",
+        "1h": "1h",
+        "4h": "4h",
+        "1day": "1d",
+    }
+    selected_candle = st.selectbox("Candle Time", list(candle_options.keys()), index=4, label_visibility="collapsed")
+
 #Fetch data from Yahoo Finance
-@st.cache_data(ttl=300)  # cache for 5 minutes so data stays fresh
+@st.cache_data(ttl=300)
 def fetch_stock_data(ticker: str, yf_period: str, yf_interval: str):
     stock = yf.Ticker(ticker)
     hist = stock.history(period=yf_period, interval=yf_interval)
     if hist.empty:
         return None, None
-    hist.index = hist.index.tz_localize(None)  # strip timezone
+    hist.index = hist.index.tz_localize(None)
     hist.reset_index(inplace=True)
     hist.columns = hist.columns.str.lower()
-    hist.rename(columns={"datetime": "date"}, inplace=True)  # interval 1d uses "Date"
+    hist.rename(columns={"datetime": "date"}, inplace=True)
     info = stock.info
     return hist, info
 
-period, interval = time_options[selected_range]
+period = time_options[selected_range]
+interval = candle_options[selected_candle]
+
 ticker_df, stock_info = fetch_stock_data(ticker_input, period, interval)
 
 #Validate
@@ -77,7 +97,29 @@ st.caption(f"Latest trading date: {ticker_df['date'].iloc[-1].strftime('%Y-%m-%d
 #Metric cards
 latest = ticker_df.iloc[-1]
 
-c1, c2, c3, c4, c5 = st.columns(5)
+# Calculate % change vs previous candle
+if len(ticker_df) >= 2:
+    prev_close = ticker_df.iloc[-2]['close']
+    curr_close = latest['close']
+    pct_change = ((curr_close - prev_close) / prev_close) * 100
+    if pct_change > 0:
+        change_card_css = "card-change-up"
+        change_val_css  = "change-up"
+        change_display  = f"+{pct_change:.2f}%"
+    elif pct_change < 0:
+        change_card_css = "card-change-down"
+        change_val_css  = "change-down"
+        change_display  = f"{pct_change:.2f}%"
+    else:
+        change_card_css = "card-change-flat"
+        change_val_css  = "change-flat"
+        change_display  = "--"
+else:
+    change_card_css = "card-change-flat"
+    change_val_css  = "change-flat"
+    change_display  = "--"
+
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 
 def metric_card(column, css_card, css_val, label, value):
     column.markdown(f"""
@@ -86,13 +128,20 @@ def metric_card(column, css_card, css_val, label, value):
         <div class="card-value {css_val}">{value}</div>
     </div>""", unsafe_allow_html=True)
 
-metric_card(c1, "card-open",   "open-val",  "Open",   f"${latest['open']:,.2f}")
-metric_card(c2, "card-high",   "high-val",  "High",   f"${latest['high']:,.2f}")
-metric_card(c3, "card-low",    "low-val",   "Low",    f"${latest['low']:,.2f}")
-metric_card(c4, "card-close",  "close-val", "Close",  f"${latest['close']:,.2f}")
-metric_card(c5, "card-volume", "vol-val",   "Volume", f"{int(latest['volume']):,}")
+metric_card(c1, "card-open",      "open-val",   "Open",     f"${latest['open']:,.2f}")
+metric_card(c2, "card-high",      "high-val",   "High",     f"${latest['high']:,.2f}")
+metric_card(c3, "card-low",       "low-val",    "Low",      f"${latest['low']:,.2f}")
+metric_card(c4, "card-close",     "close-val",  "Close",    f"${latest['close']:,.2f}")
+metric_card(c5, "card-volume",    "vol-val",    "Volume",   f"{int(latest['volume']):,}")
+metric_card(c6, change_card_css,  change_val_css, "% Change", change_display)
 
 st.markdown("<br>", unsafe_allow_html=True)
+
+# Remove gaps
+range_breaks: list[dict[str, Any]] = [{"bounds": ["sat", "mon"]}]
+
+if interval in ["15m", "30m", "1h"]:
+    range_breaks.append({"bounds": [16, 9.5], "pattern": "hour"})
 
 #Candlestick chart
 price_fig = go.Figure()
@@ -110,10 +159,15 @@ price_fig.add_trace(go.Candlestick(
 
 price_fig.update_layout(
     title=dict(
-        text=f"Candlestick Chart — {selected_range} ({ticker_input})",
+        text=f"Candlestick Chart — {selected_range} | {selected_candle} ({ticker_input})",
         font=dict(size=15, color="#1e293b"),
     ),
-    xaxis=dict(showgrid=False, title="", rangeslider=dict(visible=False)),
+    xaxis=dict(
+        showgrid=False,
+        title="",
+        rangeslider=dict(visible=False),
+        rangebreaks=range_breaks
+    ),
     yaxis=dict(showgrid=True, gridcolor="#e5e7eb", title="Price (USD)"),
     plot_bgcolor="white",
     paper_bgcolor="white",
@@ -135,7 +189,11 @@ with st.expander("**Volume Chart**", expanded=False):
         hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume: %{y:,}<extra></extra>",
     ))
     vol_fig.update_layout(
-        xaxis=dict(showgrid=False, title=""),
+        xaxis=dict(
+            showgrid=False,
+            title="",
+            rangebreaks=range_breaks
+        ),
         yaxis=dict(showgrid=True, gridcolor="#e5e7eb", title="Volume"),
         plot_bgcolor="white",
         paper_bgcolor="white",
@@ -143,13 +201,3 @@ with st.expander("**Volume Chart**", expanded=False):
         height=260,
     )
     st.plotly_chart(vol_fig, use_container_width=True)
-
-#Raw data table
-with st.expander("**Raw Data Table**", expanded=False):
-    display_cols = ["date", "open", "high", "low", "close", "volume"]
-    show_df = ticker_df[display_cols].sort_values("date", ascending=False).reset_index(drop=True)
-    show_df["date"] = show_df["date"].dt.strftime("%Y-%m-%d")
-    for price_col in ["open", "high", "low", "close"]:
-        show_df[price_col] = show_df[price_col].map("${:,.2f}".format)
-    show_df["volume"] = show_df["volume"].map("{:,}".format)
-    st.dataframe(show_df, use_container_width=True)
